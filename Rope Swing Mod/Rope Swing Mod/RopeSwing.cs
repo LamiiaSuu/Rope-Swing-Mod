@@ -1,12 +1,195 @@
-﻿using System;
+﻿using BepInEx;
+using BepInEx.Configuration;
+using BepInEx.Logging;
+using HarmonyLib;
+using Photon.Pun;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using UnityEngine;
+using static System.Runtime.CompilerServices.RuntimeHelpers;
 
-namespace Rope_Swing_Mod
+[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "1.0.0")]
+public class RopeSwing : BaseUnityPlugin
 {
-    public class RopeSwing
+    internal static ConfigEntry<float> BaseSwingForce;
+    internal static ConfigEntry<KeyCode> SwingForward;
+    internal static ConfigEntry<KeyCode> SwingBackwards;
+    internal static ConfigEntry<KeyCode> SwingLeft;
+    internal static ConfigEntry<KeyCode> SwingRight;
+    internal static ManualLogSource Log;
+
+    private void Awake()
     {
+        Log = Logger;
+        Log.LogInfo("RopeSwing loaded.");
+        Harmony harmony = new Harmony("com.lamia.ropeswing");
+        harmony.PatchAll();
+        SwingForward = Config.Bind("FlyMod", "FlyKey", KeyCode.LeftShift, "Key to activate swinging forward.");
+        SwingBackwards = Config.Bind("FlyMod", "FlyKey", KeyCode.LeftControl, "Key to activate swinging backwards.");
+        SwingLeft = Config.Bind("FlyMod", "FlyKey", KeyCode.A, "Key to activate swinging left.");
+        SwingRight = Config.Bind("FlyMod", "FlyKey", KeyCode.D, "Key to activate swinging right.");
+        BaseSwingForce = Config.Bind("RopeSwing", "BaseForce", 5f, "Base force applied when swinging forward/backward/sideways.");
+
     }
 }
+
+[HarmonyPatch(typeof(Character), "Awake")]
+public static class PalThrow
+{
+    [HarmonyPostfix]
+    public static void AwakePatch(Character __instance)
+    {
+        if (!__instance.IsLocal)
+            return;
+        if ((Object)(object)((Component)__instance).GetComponent<FlyModPatch>() == (Object)null)
+        {
+
+            ((Component)__instance).gameObject.AddComponent<FlyModPatch>();
+            RopeSwing.Log.LogInfo((object)("RopeSwingPatch added to: " + ((Object)__instance).name));
+        }
+    }
+}
+
+public class FlyModPatch : MonoBehaviourPun
+{
+    private Character character;
+    private CharacterMovement charMovement;
+    private bool jumpedOff = false;
+
+    private void Start()
+    {
+        character = ((Component)this).GetComponent<Character>();
+        charMovement = this.GetComponent<CharacterMovement>();
+    }
+
+    private void Update()
+    {
+        if (!character.IsLocal)
+
+            return;
+
+
+        if (character.data.isRopeClimbing)
+        {
+            jumpedOff = true;
+            Debug.Log("[RopeMod] Rope found");
+
+            if (Input.GetKey(RopeSwing.SwingForward.Value) || Input.GetKey(RopeSwing.SwingBackwards.Value) || Input.GetKey(RopeSwing.SwingLeft.Value) || Input.GetKey(RopeSwing.SwingRight.Value))
+            {
+
+
+
+                Vector3 swingForce = character.data.lookDirection_Flat;
+
+                
+
+                if (Input.GetKey(RopeSwing.SwingForward.Value))
+                {
+                    swingForce *= RopeSwing.BaseSwingForce.Value;
+                }
+
+                else if (Input.GetKey(RopeSwing.SwingBackwards.Value))
+                {
+                    swingForce *= -RopeSwing.BaseSwingForce.Value;
+                }
+
+
+
+                Vector3 right = Vector3.Cross(Vector3.up, character.data.lookDirection_Flat).normalized * RopeSwing.BaseSwingForce.Value;
+
+                if (Input.GetKey(RopeSwing.SwingRight.Value))
+                {
+
+                    swingForce += right;
+
+                }
+
+
+                if (Input.GetKey(RopeSwing.SwingLeft.Value))
+                {
+
+                    swingForce -= right;
+
+                }
+
+
+                List<Transform> segments = character.data.heldRope.GetRopeSegments();
+                /*
+                Rigidbody rb = segments[segments.Count-2].GetComponent<Rigidbody>();
+                if (rb != null)
+                {
+                    rb.isKinematic = false;
+                    rb.useGravity = true;
+                    rb.mass = 2f;
+                    rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+                    rb.AddForceAtPosition(swingForce, character.data.climbPos, ForceMode.Force);
+                    RopeSwing.Log.LogInfo("[RopeMod] Segment " + rb);
+                }
+                */
+                foreach (var segment in segments)
+                {
+                    float lengthMultiplier = 1f;
+                    Rigidbody rb = segment.GetComponent<Rigidbody>();
+
+                    if (rb != null)
+                    {
+                        //rb.isKinematic = false;
+                        //rb.useGravity = true;
+                        rb.maxAngularVelocity = 0.05f;
+                        rb.maxLinearVelocity = 30f;
+                        rb.mass = .5f;
+                        rb.interpolation = RigidbodyInterpolation.Interpolate;
+                        rb.solverIterations = 20;
+                        rb.solverVelocityIterations = 20;
+                        rb.AddForce(swingForce * lengthMultiplier + (Vector3.down*(RopeSwing.BaseSwingForce.Value*lengthMultiplier)), ForceMode.Force);
+                        //rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+                        //rb.AddForceAtPosition(swingForce*lengthMultiplier, character.data.climbPos, ForceMode.Acceleration);
+
+                        lengthMultiplier += 0.5f;
+
+                       
+                        
+                    }
+                    else
+                    {
+                        RopeSwing.Log.LogInfo("[RopeMod] Segment " + rb + " has no Rigidbody. Cannot apply physics effects.");
+                    }
+                }
+                
+
+                
+
+            }
+
+            else
+            {
+                
+            }
+
+
+        }
+        /*
+        else if (jumpedOff)
+        {
+            
+            
+                jumpedOff = false;
+                foreach (var part in character.refs.ragdoll.partList)
+                {
+
+
+                //if (!part.partType.ToString().Contains("Head") && !part.partType.ToString().Contains("Arm") && !part.partType.ToString().Contains("Elbow") && !part.partType.ToString().Contains("Torso") && !part.partType.ToString().Contains("Finger") && !part.partType.ToString().Contains("Shoulder"))
+                //{
+                    part.AddForce((RopeSwing.BaseSwingForce.Value*20)*character.data.lookDirection, ForceMode.Acceleration);
+                //}
+
+
+
+            }
+            RopeSwing.Log.LogMessage("Character pushed " + (RopeSwing.BaseSwingForce.Value * 2000) * character.data.lookDirection);
+
+        }
+
+        */
+    }
+}
+
