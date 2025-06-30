@@ -40,23 +40,23 @@ public class RopeSwing : BaseUnityPlugin
 }
 
 [HarmonyPatch(typeof(Character), "Awake")]
-public static class PalThrow
+public static class RopeSwingMod
 {
     [HarmonyPostfix]
     public static void AwakePatch(Character __instance)
     {
         if (!__instance.IsLocal)
             return;
-        if ((Object)(object)((Component)__instance).GetComponent<FlyModPatch>() == (Object)null)
+        if ((Object)(object)((Component)__instance).GetComponent<RopeSwingPatch>() == (Object)null)
         {
 
-            ((Component)__instance).gameObject.AddComponent<FlyModPatch>();
+            ((Component)__instance).gameObject.AddComponent<RopeSwingPatch>();
             RopeSwing.Log.LogInfo((object)("RopeSwingPatch added to: " + ((Object)__instance).name));
         }
     }
 }
 
-public class FlyModPatch : MonoBehaviourPun
+public class RopeSwingPatch : MonoBehaviourPun
 {
     private Character character;
     private CharacterMovement charMovement;

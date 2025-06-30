@@ -1,0 +1,9 @@
+{
+    "name": "RopeSwingingMod",
+    "version_number": "0.6.2",
+    "website_url": "https://github.com/LamiiaSuu/Rope-Swing-Mod",
+    "description": "Swing on ropes you are climbing.",
+    "dependencies": [
+        "BepInEx-BepInExPack_PEAK-5.4.2403"
+    ]
+}
