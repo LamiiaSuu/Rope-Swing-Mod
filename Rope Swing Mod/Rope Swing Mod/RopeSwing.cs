@@ -7,10 +7,14 @@ using System.Collections.Generic;
 using UnityEngine;
 using static System.Runtime.CompilerServices.RuntimeHelpers;
 
-[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "0.6.1")]
+[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "0.6.2")]
 public class RopeSwing : BaseUnityPlugin
 {
     internal static ConfigEntry<float> BaseSwingForce;
+    internal static ConfigEntry<float> JointAngularZLimit;
+    internal static ConfigEntry<float> RopeMass;
+    internal static ConfigEntry<float> SegmentYouAreOnRopeMass;
+    internal static ConfigEntry<float> RopeLengthSpeedMultiplierPerSegment;
     internal static ConfigEntry<KeyCode> SwingForward;
     internal static ConfigEntry<KeyCode> SwingBackwards;
     internal static ConfigEntry<KeyCode> SwingLeft;
@@ -28,7 +32,10 @@ public class RopeSwing : BaseUnityPlugin
         SwingLeft = Config.Bind("RopeSwing", "SwingLeft", KeyCode.A, "Key to activate swinging left.");
         SwingRight = Config.Bind("RopeSwing", "SwingRight", KeyCode.D, "Key to activate swinging right.");
         BaseSwingForce = Config.Bind("RopeSwing", "BaseForce", 7.5f, "Base force applied when swinging forward/backward/sideways.");
-
+        JointAngularZLimit = Config.Bind("RopeSwing", "JointAngularZLimit", 25f, "The Joint restrictions on ropes.");
+        RopeMass = Config.Bind("RopeSwing", "RopeMass", 0.15f, "The mass of every rope segment.");
+        SegmentYouAreOnRopeMass = Config.Bind("RopeSwing", "SegmentYouAreOnRopeMass", 0.35f, "The mass of the rope segment you are currently touching. This should be higher than the normal ropes mass.");
+        RopeLengthSpeedMultiplierPerSegment = Config.Bind("RopeSwing", "RopeLengthSpeedMultiplierPerSegment", 0.35f, "How much will the speed multiplier increase with each segment of the rope.");
     }
 }
 
@@ -141,10 +148,10 @@ public class FlyModPatch : MonoBehaviourPun
                         rb.useGravity = true;
                         rb.maxAngularVelocity = 0.1f;
                         rb.maxLinearVelocity = 55f;
-                        rb.mass = 0.15f;
+                        rb.mass = RopeSwing.RopeMass.Value;
                         ConfigurableJoint joint = segment.GetComponent<ConfigurableJoint>();
                         joint.angularZMotion = ConfigurableJointMotion.Limited;
-                        joint.angularZLimit = new SoftJointLimit { limit = 25f };
+                        joint.angularZLimit = new SoftJointLimit { limit = RopeSwing.JointAngularZLimit.Value };
 
                         if (!isBelowPos)
                             rb.AddForce((swingForce / 4) * lengthMultiplier + (Vector3.down * (RopeSwing.BaseSwingForce.Value * lengthMultiplier)), ForceMode.Force);
@@ -164,7 +171,7 @@ public class FlyModPatch : MonoBehaviourPun
                         //rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
                         //rb.AddForceAtPosition(swingForce*lengthMultiplier, character.data.climbPos, ForceMode.Acceleration);
 
-                        lengthMultiplier += 0.35f;
+                        lengthMultiplier += RopeSwing.RopeLengthSpeedMultiplierPerSegment.Value;
 
 
 
@@ -190,7 +197,7 @@ public class FlyModPatch : MonoBehaviourPun
                     }
                     
                     rbs.AddForce(swingForce, ForceMode.Force);
-                    rbs.mass = .45f;
+                    rbs.mass = RopeSwing.SegmentYouAreOnRopeMass.Value;
                     RopeSwing.Log.LogInfo("[RopeMod] Segment " + rbs);
                 }
 
