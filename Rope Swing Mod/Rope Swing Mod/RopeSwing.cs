@@ -27,7 +27,7 @@ public class RopeSwing : BaseUnityPlugin
         SwingBackwards = Config.Bind("RopeSwing", "SwingBackwards", KeyCode.LeftControl, "Key to activate swinging backwards.");
         SwingLeft = Config.Bind("RopeSwing", "SwingLeft", KeyCode.A, "Key to activate swinging left.");
         SwingRight = Config.Bind("RopeSwing", "SwingRight", KeyCode.D, "Key to activate swinging right.");
-        BaseSwingForce = Config.Bind("RopeSwing", "BaseForce", 55f, "Base force applied when swinging forward/backward/sideways.");
+        BaseSwingForce = Config.Bind("RopeSwing", "BaseForce", 7.5f, "Base force applied when swinging forward/backward/sideways.");
 
     }
 }
@@ -131,7 +131,7 @@ public class FlyModPatch : MonoBehaviourPun
                 bool isBelowPos = false;
                 foreach (var segment in segments)
                 {
-                    //float lengthMultiplier = 1f;
+                    float lengthMultiplier = 1f;
                     Rigidbody rb = segment.GetComponent<Rigidbody>();
                     
                     if (rb != null)
@@ -140,22 +140,27 @@ public class FlyModPatch : MonoBehaviourPun
                         rb.isKinematic = false;
                         rb.useGravity = true;
                         rb.maxAngularVelocity = 0.1f;
-                        rb.maxLinearVelocity = 75f;
-                        rb.mass = 0.5f;
-                        if(isBelowPos)
-                            rb.mass = 0.1f;
+                        rb.maxLinearVelocity = 55f;
+                        rb.mass = 0.25f;
+                        if(!isBelowPos)
+                            rb.AddForce((swingForce / 3) * lengthMultiplier + (Vector3.down * (RopeSwing.BaseSwingForce.Value * lengthMultiplier)), ForceMode.Force);
+                        else
+                        {
+
+                        }
                         rb.interpolation = RigidbodyInterpolation.Interpolate;
                         rb.solverIterations = 20;
                         rb.solverVelocityIterations = 20;
-                        if (rb == rbs)
+                        
+                        if (rb.Equals(rbs))
                             isBelowPos = true;
                         //rb.angularDamping = 0.9f;
                         //rb.AddForce(Vector3.down * 25f, ForceMode.Acceleration);
-                        //rb.AddForce(swingForce * lengthMultiplier + (Vector3.down*(RopeSwing.BaseSwingForce.Value*lengthMultiplier)), ForceMode.Force);
+                        
                         //rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
                         //rb.AddForceAtPosition(swingForce*lengthMultiplier, character.data.climbPos, ForceMode.Acceleration);
 
-                        //lengthMultiplier += 0.5f;
+                        lengthMultiplier += 0.35f;
 
 
 
@@ -168,20 +173,20 @@ public class FlyModPatch : MonoBehaviourPun
                 
                 if (rbs != null)
                 {
-                    /*
+                    
                     foreach (var part in character.refs.ragdoll.partList)
                     {
 
 
-                        if (part.partType.ToString().Contains("Hand"))
-                        {
-                        //part.AddForce(swingForce*0.75f, ForceMode.Force);
+                        //if (part.partType.ToString().Contains("Hand"))
+                        //{
+                        part.AddForce(swingForce *0.5f, ForceMode.Force);
                         //part.transform.position = rbs.transform.position;
-                        }
+                        //}
                     }
-                    */
+                    
                     rbs.AddForce(swingForce, ForceMode.Force);
-                    rbs.mass = 1f;
+                    rbs.mass = .45f;
                     RopeSwing.Log.LogInfo("[RopeMod] Segment " + rbs);
                 }
 
