@@ -141,9 +141,13 @@ public class FlyModPatch : MonoBehaviourPun
                         rb.useGravity = true;
                         rb.maxAngularVelocity = 0.1f;
                         rb.maxLinearVelocity = 55f;
-                        rb.mass = 0.25f;
-                        if(!isBelowPos)
-                            rb.AddForce((swingForce / 3) * lengthMultiplier + (Vector3.down * (RopeSwing.BaseSwingForce.Value * lengthMultiplier)), ForceMode.Force);
+                        rb.mass = 0.15f;
+                        ConfigurableJoint joint = segment.GetComponent<ConfigurableJoint>();
+                        joint.angularZMotion = ConfigurableJointMotion.Limited;
+                        joint.angularZLimit = new SoftJointLimit { limit = 15f };
+
+                        if (!isBelowPos)
+                            rb.AddForce((swingForce / 4) * lengthMultiplier + (Vector3.down * (RopeSwing.BaseSwingForce.Value * lengthMultiplier)), ForceMode.Force);
                         else
                         {
 
