@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using static System.Runtime.CompilerServices.RuntimeHelpers;
 
-[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "1.0.0")]
+[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "0.6.1")]
 public class RopeSwing : BaseUnityPlugin
 {
     internal static ConfigEntry<float> BaseSwingForce;
