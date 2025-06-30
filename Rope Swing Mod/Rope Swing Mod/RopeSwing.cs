@@ -27,7 +27,7 @@ public class RopeSwing : BaseUnityPlugin
         SwingBackwards = Config.Bind("RopeSwing", "SwingBackwards", KeyCode.LeftControl, "Key to activate swinging backwards.");
         SwingLeft = Config.Bind("RopeSwing", "SwingLeft", KeyCode.A, "Key to activate swinging left.");
         SwingRight = Config.Bind("RopeSwing", "SwingRight", KeyCode.D, "Key to activate swinging right.");
-        BaseSwingForce = Config.Bind("RopeSwing", "BaseForce", 15f, "Base force applied when swinging forward/backward/sideways.");
+        BaseSwingForce = Config.Bind("RopeSwing", "BaseForce", 55f, "Base force applied when swinging forward/backward/sideways.");
 
     }
 }
@@ -141,7 +141,7 @@ public class FlyModPatch : MonoBehaviourPun
                         rb.useGravity = true;
                         rb.maxAngularVelocity = 0.1f;
                         rb.maxLinearVelocity = 75f;
-                        rb.mass = 1.0f;
+                        rb.mass = 0.5f;
                         if(isBelowPos)
                             rb.mass = 0.1f;
                         rb.interpolation = RigidbodyInterpolation.Interpolate;
@@ -181,7 +181,7 @@ public class FlyModPatch : MonoBehaviourPun
                     }
                     */
                     rbs.AddForce(swingForce, ForceMode.Force);
-                    //rbs.mass = 1f;
+                    rbs.mass = 1f;
                     RopeSwing.Log.LogInfo("[RopeMod] Segment " + rbs);
                 }
 
