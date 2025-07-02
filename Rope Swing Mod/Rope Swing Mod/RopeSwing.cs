@@ -4,6 +4,7 @@ using BepInEx.Logging;
 using HarmonyLib;
 using Photon.Pun;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 using static System.Runtime.CompilerServices.RuntimeHelpers;
 
@@ -55,6 +56,17 @@ public static class RopeSwingMod
         }
     }
 }
+
+
+[HarmonyPatch(typeof(CharacterRopeHandling), "Update")]
+class Patch_CharacterRopeHandling_Update_SetMaxAngle
+{
+    static void Prefix(CharacterRopeHandling __instance)
+    {
+        __instance.maxRopeAngle = 150f;  
+    }
+}
+
 
 public class RopeSwingPatch : MonoBehaviourPun
 {
