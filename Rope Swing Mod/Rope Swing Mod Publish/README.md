@@ -1,4 +1,4 @@
-# Rope Swinging Mod v0.6.2
+# Rope Swinging Mod v0.6.3
 
 **RopeSwing** is a mod for PEAK that allows swinging on ropes by adding dynamic momentum, player-controlled swing forces to rope segments. This mod lets you push yourself around while climbing ropes.
 
@@ -72,6 +72,10 @@ Here you can adjust:
 ---
 
 ## Changelog
+
+### 0.6.3
+- Fixed a bug where you would fall off the rope if climbing down while swinging
+
 
 ### 0.6.2
 - Added full configurability
