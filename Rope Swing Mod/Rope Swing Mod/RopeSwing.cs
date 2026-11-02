@@ -5,7 +5,7 @@ using Photon.Pun;
 using UnityEngine;
 using System.Collections.Generic;
 
-[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "0.7.0")]
+[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "0.7.1")]
 public class RopeSwing : BaseUnityPlugin
 {
     internal static ConfigEntry<float> Acceleration, MaxSpeed, PumpBoost, CoastDamping, SteeringDamping, ClimberLoad;
@@ -17,7 +17,7 @@ public class RopeSwing : BaseUnityPlugin
         Acceleration = Config.Bind("Swing Physics", "Acceleration", 24f,
             new ConfigDescription("Swing acceleration in metres per second squared. Higher feels stronger.", new AcceptableValueRange<float>(1f, 40f)));
         MaxSpeed = Config.Bind("Swing Physics", "DriveSpeed", 10f,
-            new ConfigDescription("Speed where input stops adding energy. Gravity and existing momentum remain free.", new AcceptableValueRange<float>(3f, 20f)));
+            new ConfigDescription("Short-rope speed where input stops adding energy. Longer reaches scale this up with leverage. Gravity and existing momentum remain free.", new AcceptableValueRange<float>(3f, 20f)));
         PumpBoost = Config.Bind("Swing Physics", "PumpBoost", 0.2f,
             new ConfigDescription("Extra drive when pressing along the direction of travel. Reverse input brakes immediately.", new AcceptableValueRange<float>(0f, 1f)));
         CoastDamping = Config.Bind("Swing Physics", "CoastDamping", 0.12f,
@@ -34,7 +34,7 @@ public class RopeSwing : BaseUnityPlugin
         harmony.PatchAll(typeof(RopeSwing).Assembly);
         foreach (Character character in FindObjectsByType<Character>(FindObjectsSortMode.None))
             Attach(character);
-        Logger.LogInfo("RopeSwing 0.7.0 loaded. All clients need 0.7.0. Force-based climbing and cooperative swinging enabled.");
+        Logger.LogInfo("RopeSwing 0.7.1 loaded. All clients need 0.7.1. Force-based climbing and cooperative swinging enabled.");
     }
 
     internal static void Attach(Character character)
@@ -291,6 +291,7 @@ public class RopeSwingInput : MonoBehaviourPun
 internal static class SwingPhysics
 {
     private static readonly Dictionary<Rigidbody, Vector3> Drive = new Dictionary<Rigidbody, Vector3>();
+    private static readonly Dictionary<Rigidbody, float> ReachScale = new Dictionary<Rigidbody, float>();
     private static readonly Dictionary<Rigidbody, float> Loads = new Dictionary<Rigidbody, float>();
     private static readonly HashSet<Character> Occupants = new HashSet<Character>();
 
@@ -304,6 +305,7 @@ internal static class SwingPhysics
         if (segments.Count < 2)
             return;
         Drive.Clear();
+        ReachScale.Clear();
         Loads.Clear();
         Occupants.Clear();
         foreach (Character climber in rope.charactersClimbing)
@@ -326,6 +328,14 @@ internal static class SwingPhysics
                 Loads[loaded] = Mathf.Min(3f, currentLoad + RopeSwing.ClimberLoad.Value * (j == index ? 1f : 0.5f));
             }
             if (input.sqrMagnitude < 0.0001f) continue;
+            // Use distance along the upper rope, not world-space distance: a
+            // folded rope must not lose drive just because it folds toward its anchor.
+            float reach = 0f;
+            for (int j = 1; j <= index; j++)
+                reach += Vector3.Distance(segments[j - 1].position, segments[j].position);
+            // Preserve short-rope tuning. Longer reaches get more leverage and
+            // a higher speed allowance so successive pumps can build a wider arc.
+            float reachScale = Mathf.Clamp(Mathf.Sqrt(Mathf.Max(1f, reach / 5f)), 1f, 2.5f);
             // Move the upper chain coherently, tapering drive near the anchor.
             // The tail is passive except for a short blend below the grip.
             for (int i = 1; i <= Mathf.Min(segments.Count - 1, index + 2); i++)
@@ -341,7 +351,9 @@ internal static class SwingPhysics
                 float weight = i <= index ? Mathf.Lerp(0.2f, 1f, (float)i / Mathf.Max(1, index))
                     : (i == index + 1 ? 0.35f : 0.15f);
                 Drive.TryGetValue(body, out Vector3 accumulated);
-                Drive[body] = accumulated + tangent * weight;
+                Drive[body] = accumulated + tangent * (weight * reachScale);
+                ReachScale.TryGetValue(body, out float previousScale);
+                ReachScale[body] = Mathf.Max(previousScale, reachScale);
             }
         }
         Vector3 anchorVelocity = segments[0].TryGetComponent(out Rigidbody anchorBody)
@@ -355,7 +367,9 @@ internal static class SwingPhysics
             Drive.TryGetValue(body, out Vector3 requested);
             // Cancellation happens before pumping and speed limiting, so equal
             // opposing inputs cancel. Limit cooperative boost to avoid runaway drive.
-            Vector3 drive = Vector3.ClampMagnitude(requested, 1.5f);
+            ReachScale.TryGetValue(body, out float reachScale);
+            reachScale = Mathf.Max(1f, reachScale);
+            Vector3 drive = Vector3.ClampMagnitude(requested, 1.5f * reachScale);
             Vector3 radial = body.worldCenterOfMass - segments[0].position;
             if (radial.sqrMagnitude < 0.0625f)
                 radial = segments[i].up;
@@ -374,8 +388,11 @@ internal static class SwingPhysics
                 continue;
             Vector3 direction = drive.normalized;
             float alongSpeed = Vector3.Dot(velocity, direction);
-            float speed = RopeSwing.MaxSpeed.Value;
-            float assistance = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Max(0f, alongSpeed) / speed);
+            float speed = RopeSwing.MaxSpeed.Value * reachScale;
+            // Keep full response through the useful pumping range. The old
+            // taper weakened every forward push, even far below the speed limit.
+            float fade = Mathf.InverseLerp(speed * 0.65f, speed, Mathf.Max(0f, alongSpeed));
+            float assistance = 1f - Mathf.SmoothStep(0f, 1f, fade);
             float pump = 1f + RopeSwing.PumpBoost.Value * Mathf.Clamp01(alongSpeed / (speed * 0.5f));
             body.WakeUp();
             body.AddForce(drive * (RopeSwing.Acceleration.Value * assistance * pump), ForceMode.Acceleration);
