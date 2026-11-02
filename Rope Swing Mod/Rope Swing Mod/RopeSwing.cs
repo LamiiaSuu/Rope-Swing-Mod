@@ -5,17 +5,17 @@ using Photon.Pun;
 using UnityEngine;
 using System.Collections.Generic;
 
-[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "0.7.1")]
+[BepInPlugin("com.lamia.ropeswing", "RopeSwing", "1.0.0")]
 public class RopeSwing : BaseUnityPlugin
 {
-    internal static ConfigEntry<float> Acceleration, MaxSpeed, PumpBoost, CoastDamping, SteeringDamping, ClimberLoad;
+    internal static ConfigEntry<float> Acceleration, MaxSpeed, PumpBoost, CoastDamping, SteeringDamping, ClimberLoad, JumpAirDrag;
     internal static ConfigEntry<KeyCode> Forward, Back, Left, Right;
     private Harmony harmony;
 
     private void Awake()
     {
-        Acceleration = Config.Bind("Swing Physics", "Acceleration", 24f,
-            new ConfigDescription("Swing acceleration in metres per second squared. Higher feels stronger.", new AcceptableValueRange<float>(1f, 40f)));
+        Acceleration = Config.Bind("Swing Physics", "Acceleration", 12f,
+            new ConfigDescription("Full swing acceleration in metres per second squared. Starts at half this value and builds over six seconds of active swinging.", new AcceptableValueRange<float>(1f, 40f)));
         MaxSpeed = Config.Bind("Swing Physics", "DriveSpeed", 10f,
             new ConfigDescription("Short-rope speed where input stops adding energy. Longer reaches scale this up with leverage. Gravity and existing momentum remain free.", new AcceptableValueRange<float>(3f, 20f)));
         PumpBoost = Config.Bind("Swing Physics", "PumpBoost", 0.2f,
@@ -26,6 +26,8 @@ public class RopeSwing : BaseUnityPlugin
             new ConfigDescription("Extra drag perpendicular to the combined input. Reduces sideways wandering without resisting the requested direction.", new AcceptableValueRange<float>(0f, 2f)));
         ClimberLoad = Config.Bind("Swing Physics", "ClimberLoad", 0.75f,
             new ConfigDescription("Extra downward acceleration from a climber, spread across nearby segments. Does not change segment mass.", new AcceptableValueRange<float>(0f, 2f)));
+        JumpAirDrag = Config.Bind("Swing Physics", "JumpAirDrag", 0.8f,
+            new ConfigDescription("Initial air resistance after a rope jump, per second. Scales with rope speed and fades immediately back to native PEAK drag over 1.8 seconds. Never adds thrust.", new AcceptableValueRange<float>(0.1f, 3f)));
         Forward = Config.Bind("RopeSwing", "FlyKey", KeyCode.LeftShift, "Swing forward.");
         Back = Config.Bind("RopeSwing", "SwingBackwards", KeyCode.LeftControl, "Swing backward.");
         Left = Config.Bind("RopeSwing", "SwingLeft", KeyCode.A, "Swing left.");
@@ -34,7 +36,7 @@ public class RopeSwing : BaseUnityPlugin
         harmony.PatchAll(typeof(RopeSwing).Assembly);
         foreach (Character character in FindObjectsByType<Character>(FindObjectsSortMode.None))
             Attach(character);
-        Logger.LogInfo("RopeSwing 0.7.1 loaded. All clients need 0.7.1. Force-based climbing and cooperative swinging enabled.");
+        Logger.LogInfo("RopeSwing 1.0.0 loaded. All clients need 1.0.0. Force-based climbing and cooperative swinging enabled.");
     }
 
     internal static void Attach(Character character)
@@ -163,8 +165,12 @@ public class RopeSwingInput : MonoBehaviourPun
         return targetVelocity;
     }
 
-    internal void ResetTracking()
+    internal void ResetTracking(bool clearFlight = true)
     {
+        RestoreClimbCollisions();
+        if (clearFlight) { launchAirActive = false; launchStrength = 0f; }
+        rampRope = null;
+        rampSeconds = 0f;
         trackingRope = null;
         targetVelocity = Vector3.zero;
         ownerSampleReceived = float.NegativeInfinity;
@@ -172,34 +178,177 @@ public class RopeSwingInput : MonoBehaviourPun
         followedVelocity = Vector3.zero;
     }
 
+    private struct ClimbCollisionPair
+    {
+        internal Collider Body, Other;
+        internal ClimbCollisionPair(Collider body, Collider other) { Body = body; Other = other; }
+    }
+    private readonly List<ClimbCollisionPair> climbCollisionPairs = new List<ClimbCollisionPair>();
+    private Rope collisionRope;
+    private float nextCollisionRefresh;
+
+    private void RestoreClimbCollisions()
+    {
+        foreach (ClimbCollisionPair pair in climbCollisionPairs)
+            if (pair.Body && pair.Other) Physics.IgnoreCollision(pair.Body, pair.Other, false);
+        climbCollisionPairs.Clear();
+        collisionRope = null;
+        nextCollisionRefresh = 0f;
+    }
+
+    private void IgnoreClimbPair(Collider body, Collider other)
+    {
+        if (!body || !other || body == other || body.isTrigger || other.isTrigger
+            || Physics.GetIgnoreCollision(body, other)) return;
+        // Only record pairs changed by this component. Existing game collision
+        // exclusions are never re-enabled when the climber releases the rope.
+        Physics.IgnoreCollision(body, other, true);
+        climbCollisionPairs.Add(new ClimbCollisionPair(body, other));
+    }
+
+    private void UpdateClimbCollisions(Rope rope)
+    {
+        if (collisionRope != rope) RestoreClimbCollisions();
+        if (!rope || !character || !character.refs.ragdoll) return;
+        collisionRope = rope;
+        if (Time.unscaledTime < nextCollisionRefresh) return;
+        nextCollisionRefresh = Time.unscaledTime + 0.25f;
+        // Restore and rebuild so players who left the rope regain collisions,
+        // and newly created rope segments or arriving climbers are included.
+        RestoreClimbCollisions();
+        collisionRope = rope;
+        nextCollisionRefresh = Time.unscaledTime + 0.25f;
+        Collider[] bodies = character.refs.ragdoll.GetComponentsInChildren<Collider>();
+        Collider[] ropeColliders = rope.GetComponentsInChildren<Collider>();
+        foreach (Collider body in bodies)
+        {
+            foreach (Collider ropeCollider in ropeColliders) IgnoreClimbPair(body, ropeCollider);
+            foreach (Character otherClimber in rope.charactersClimbing)
+            {
+                if (!otherClimber || otherClimber == character || !otherClimber.data.isRopeClimbing
+                    || otherClimber.data.heldRope != rope || !otherClimber.refs.ragdoll) continue;
+                foreach (Collider otherBody in otherClimber.refs.ragdoll.GetComponentsInChildren<Collider>())
+                    IgnoreClimbPair(body, otherBody);
+            }
+        }
+    }
+    private bool launchAirActive;
+    private float launchTime;
+    private float launchStrength;
+    private Rope rampRope;
+    private float rampSeconds;
     private Rope followedRope;
     private Vector3 followedVelocity;
 
     internal void Follow(Rope rope, Vector3 velocity)
     {
+        launchAirActive = false;
         followedRope = rope;
         followedVelocity = velocity;
     }
 
+    internal bool TryCarrierVelocity(out Vector3 velocity)
+    {
+        velocity = Vector3.zero;
+        if (!character || !character.IsLocal || !character.data.isRopeClimbing
+            || !followedRope || character.data.heldRope != followedRope) return false;
+        velocity = GripVelocity(followedRope, followedVelocity);
+        if (!Finite(velocity)) return false;
+        velocity = Vector3.ClampMagnitude(velocity, 60f);
+        return true;
+    }
+    internal float DriveStrength(Rope rope, Vector3 input)
+    {
+        if (rampRope != rope) { rampRope = rope; rampSeconds = 0f; }
+        if (input.sqrMagnitude > 0.0001f)
+            rampSeconds = Mathf.Min(6f, rampSeconds + Time.fixedDeltaTime);
+        else
+            rampSeconds = Mathf.Max(0f, rampSeconds - Time.fixedDeltaTime);
+        return Mathf.Lerp(0.5f, 1f, Mathf.SmoothStep(0f, 1f, rampSeconds / 6f));
+    }
+
+    internal bool TryLaunchRetention(float nativeRetention, out float retention)
+    {
+        retention = 1f;
+        if (!launchAirActive || !character || !character.IsLocal || character.data.isRopeClimbing)
+            return false;
+        if ((Time.time > launchTime + 0.2f && character.data.isGrounded)
+            || character.data.currentRagdollControll < 0.3f)
+        {
+            launchAirActive = false;
+            return false;
+        }
+        float elapsed = Mathf.Max(0f, Time.time - launchTime);
+        if (elapsed >= 1.8f)
+        {
+            launchAirActive = false;
+            return false;
+        }
+        // Ease out the reduced drag into PEAK's current native drag. Both
+        // retentions are <= 1, so this can only remove speed, never add thrust.
+        // Fade from the very first frame, without a hold phase. The assistance
+        // reaches exactly zero at the endpoint, so native drag resumes smoothly.
+        float assistance = launchStrength * (1f - Mathf.Clamp01(elapsed / 1.8f));
+        float launchRetention = Mathf.Exp(-RopeSwing.JumpAirDrag.Value * Time.fixedDeltaTime);
+        retention = Mathf.Lerp(nativeRetention, launchRetention, assistance);
+        return true;
+    }
     internal void PrepareRelease(bool jumped)
     {
-        if (jumped && character && character.IsLocal && followedRope
-            && character.data.heldRope == followedRope && Finite(followedVelocity))
+        if (!character || !character.IsLocal || !character.data.isRopeClimbing) return;
+        Vector3 launchCarrier = Vector3.zero;
+        bool carry = jumped && character && character.IsLocal && followedRope
+            && character.data.heldRope == followedRope;
+        if (carry)
         {
-            Vector3 velocity = GripVelocity(followedRope, followedVelocity);
-            if (velocity.sqrMagnitude > 0.01f)
+            Rope rope = followedRope;
+            launchCarrier = GripVelocity(rope, followedVelocity);
+            // Sample the exact grip velocity on the simulation owner at release.
+            // Other climbers use the most recent validated owner sample.
+            if (rope.photonView.IsMine && rope.climbingAPI && rope.SegmentCount > 1)
             {
-                // Carry only missing speed in the rope's direction. Existing
-                // momentum and PEAK's normal jump impulse are not overwritten.
-                Vector3 direction = velocity.normalized;
-                float missing = Mathf.Clamp(Vector3.Dot(velocity - character.data.avarageVelocity, direction), 0f, 8f);
+                float percent = Mathf.Clamp01(character.data.ropePercent);
+                Transform segment = rope.climbingAPI.GetSegmentFromPercent(percent);
+                Vector3 point = rope.climbingAPI.GetPosition(percent) + character.data.ropeClimbNormal * 0.5f;
+                if (segment && segment.TryGetComponent(out Rigidbody body))
+                    launchCarrier = body.GetPointVelocity(point);
+            }
+            carry = Finite(launchCarrier);
+        }
+
+        // A stationary rope should behave like a normal PEAK jump, including
+        // native air drag. Reject tiny motion from idle rope jitter.
+        float speed = carry ? launchCarrier.magnitude : 0f;
+        float momentumStrength = Mathf.InverseLerp(0.5f, 12f, speed);
+        carry = carry && momentumStrength > 0f;
+        // A single third-strength launch target proportional to measured speed;
+        // never stack it on the existing player velocity.
+        if (carry) launchCarrier *= 1f / 3f;
+        if (carry && launchCarrier.sqrMagnitude > 0.01f)
+        {
+            Vector3 average = Vector3.zero;
+            float totalMass = 0f;
+            foreach (var part in character.refs.ragdoll.partList)
+            {
+                if (!part.Rig || part.Rig.isKinematic) continue;
+                average += part.Rig.linearVelocity * part.Rig.mass;
+                totalMass += part.Rig.mass;
+            }
+            if (totalMass > 0f)
+            {
+                average /= totalMass;
+                // Set the centre-of-mass launch speed once. Preserve relative
+                // body-part motion; PEAK supplies its normal jump afterwards.
+                Vector3 missing = launchCarrier - average;
                 foreach (var part in character.refs.ragdoll.partList)
                     if (part.Rig && !part.Rig.isKinematic)
-                        part.Rig.AddForce(direction * missing, ForceMode.VelocityChange);
+                        part.Rig.linearVelocity += missing;
             }
         }
         ResetTracking();
+        if (carry) { launchAirActive = true; launchTime = Time.time; launchStrength = momentumStrength; }
     }
+
     private void OnDisable() { ResetTracking(); }
     private void OnDestroy() { ResetTracking(); }
     private Character character;
@@ -240,7 +389,8 @@ public class RopeSwingInput : MonoBehaviourPun
         if (!character || character.data == null || !photonView)
             return;
         bool climbing = character.data.isRopeClimbing && character.data.heldRope;
-        if (!climbing) ResetTracking();
+        if (!climbing) ResetTracking(false);
+        UpdateClimbCollisions(climbing ? character.data.heldRope : null);
         Vector3 input = Vector3.zero;
         if (character.IsLocal)
         {
@@ -293,6 +443,7 @@ internal static class SwingPhysics
     private static readonly Dictionary<Rigidbody, Vector3> Drive = new Dictionary<Rigidbody, Vector3>();
     private static readonly Dictionary<Rigidbody, float> ReachScale = new Dictionary<Rigidbody, float>();
     private static readonly Dictionary<Rigidbody, float> Loads = new Dictionary<Rigidbody, float>();
+    private static readonly List<float> ArcDistance = new List<float>();
     private static readonly HashSet<Character> Occupants = new HashSet<Character>();
 
     private static void Postfix(Rope __instance)
@@ -304,6 +455,10 @@ internal static class SwingPhysics
         List<Transform> segments = rope.GetRopeSegments();
         if (segments.Count < 2)
             return;
+        ArcDistance.Clear();
+        ArcDistance.Add(0f);
+        for (int i = 1; i < segments.Count; i++)
+            ArcDistance.Add(ArcDistance[i - 1] + Vector3.Distance(segments[i - 1].position, segments[i].position));
         Drive.Clear();
         ReachScale.Clear();
         Loads.Clear();
@@ -325,20 +480,19 @@ internal static class SwingPhysics
             {
                 if (!segments[j].TryGetComponent(out Rigidbody loaded) || loaded.isKinematic) continue;
                 Loads.TryGetValue(loaded, out float currentLoad);
-                Loads[loaded] = Mathf.Min(3f, currentLoad + RopeSwing.ClimberLoad.Value * (j == index ? 1f : 0.5f));
+                Loads[loaded] = Mathf.Max(currentLoad, RopeSwing.ClimberLoad.Value * (j == index ? 1f : 0.5f));
             }
+            float driveStrength = controls.DriveStrength(rope, input);
             if (input.sqrMagnitude < 0.0001f) continue;
             // Use distance along the upper rope, not world-space distance: a
             // folded rope must not lose drive just because it folds toward its anchor.
-            float reach = 0f;
-            for (int j = 1; j <= index; j++)
-                reach += Vector3.Distance(segments[j - 1].position, segments[j].position);
+            float reach = Mathf.Max(0.5f, ArcDistance[index]);
             // Preserve short-rope tuning. Longer reaches get more leverage and
             // a higher speed allowance so successive pumps can build a wider arc.
             float reachScale = Mathf.Clamp(Mathf.Sqrt(Mathf.Max(1f, reach / 5f)), 1f, 2.5f);
-            // Move the upper chain coherently, tapering drive near the anchor.
-            // The tail is passive except for a short blend below the grip.
-            for (int i = 1; i <= Mathf.Min(segments.Count - 1, index + 2); i++)
+            // Acceleration and speed allowance both scale with lever length.
+            // This avoids overdriving the upper rope while starving the grip/tail.
+            for (int i = 1; i < segments.Count; i++)
             {
                 if (!segments[i].TryGetComponent(out Rigidbody body) || body.isKinematic)
                     continue;
@@ -348,12 +502,12 @@ internal static class SwingPhysics
                 if (radial.sqrMagnitude < 0.0625f)
                     radial = segments[i].up;
                 Vector3 tangent = Vector3.ProjectOnPlane(input, radial.normalized);
-                float weight = i <= index ? Mathf.Lerp(0.2f, 1f, (float)i / Mathf.Max(1, index))
-                    : (i == index + 1 ? 0.35f : 0.15f);
+                float lever = Mathf.Clamp(ArcDistance[i] / reach, 0f, 1.5f);
+                float segmentScale = reachScale * lever;
                 Drive.TryGetValue(body, out Vector3 accumulated);
-                Drive[body] = accumulated + tangent * (weight * reachScale);
+                Drive[body] = accumulated + tangent * (segmentScale * driveStrength);
                 ReachScale.TryGetValue(body, out float previousScale);
-                ReachScale[body] = Mathf.Max(previousScale, reachScale);
+                ReachScale[body] = Mathf.Max(previousScale, segmentScale);
             }
         }
         Vector3 anchorVelocity = segments[0].TryGetComponent(out Rigidbody anchorBody)
@@ -368,7 +522,7 @@ internal static class SwingPhysics
             // Cancellation happens before pumping and speed limiting, so equal
             // opposing inputs cancel. Limit cooperative boost to avoid runaway drive.
             ReachScale.TryGetValue(body, out float reachScale);
-            reachScale = Mathf.Max(1f, reachScale);
+            reachScale = Mathf.Max(0.01f, reachScale);
             Vector3 drive = Vector3.ClampMagnitude(requested, 1.5f * reachScale);
             Vector3 radial = body.worldCenterOfMass - segments[0].position;
             if (radial.sqrMagnitude < 0.0625f)
@@ -426,13 +580,13 @@ internal static class FollowMovingRope
         foreach (var part in character.refs.ragdoll.partList)
         {
             if (part.partType.ToString() != "Torso" || !part.Rig) continue;
-            float stiffness = Mathf.Clamp(__instance.climbForce, 36f, 225f);
-            float damping = 2f * Mathf.Sqrt(stiffness);
+            float stiffness = Mathf.Clamp(__instance.climbForce, 100f, 256f);
+            float damping = 1.4f * Mathf.Sqrt(stiffness);
             float step = Time.fixedDeltaTime;
             float denominator = 1f + damping * step + stiffness * step * step;
             Vector3 acceleration = ((target - part.Rig.position) * stiffness
                 + (targetVelocity - part.Rig.linearVelocity) * damping - Physics.gravity) / denominator;
-            __result = Vector3.ClampMagnitude(acceleration, 100f);
+            __result = Vector3.ClampMagnitude(acceleration, 120f);
             return;
         }
         // If a torso is unavailable, retain the game's original climbing force.
@@ -448,5 +602,34 @@ internal static class ReleaseSwingGrip
     {
         if (___character && ___character.TryGetComponent(out RopeSwingInput controls))
             controls.PrepareRelease(jumped);
+    }
+}
+// Keep normal body/rotation damping, but apply linear drag relative to the
+// carrier. Dragging the entire world-space velocity continually erases swing
+// momentum and forces the attachment spring to pull the player from behind.
+[HarmonyPatch(typeof(Bodypart), "Drag")]
+internal static class RopeRelativeBodyDrag
+{
+    private static void Prefix(Bodypart __instance, Character ___character, float drag, bool ignoreRagdoll, out Vector3 __state)
+    {
+        __state = Vector3.zero;
+        // Preserve explicit stops, special drag and forced ragdoll handling.
+        if (ignoreRagdoll || drag <= 0f || drag >= 1f || !___character || !___character.IsLocal
+            || !___character.TryGetComponent(out RopeSwingInput controls)) return;
+        float effectiveDrag = Mathf.Lerp(1f, drag, ___character.data.currentRagdollControll);
+        if (controls.TryLaunchRetention(effectiveDrag, out float retention))
+        {
+            // Keep normal angular damping. The final linear retention is
+            // max(native retention, air retention), always <= 1: never a boost.
+            if (__instance.Rig && !__instance.Rig.isKinematic)
+                __state = __instance.Rig.linearVelocity * Mathf.Max(0f, retention - effectiveDrag);
+        }
+        else if (controls.TryCarrierVelocity(out Vector3 carrier))
+            __state = carrier * (1f - effectiveDrag);
+    }
+    private static void Postfix(Bodypart __instance, Vector3 __state)
+    {
+        if (__state.sqrMagnitude > 0f && __instance.Rig && !__instance.Rig.isKinematic)
+            __instance.Rig.AddForce(__state, ForceMode.VelocityChange);
     }
 }
